@@ -1,0 +1,79 @@
+========================================================================
+1. Versioned event ordering
+   Delivery order: version 2, version 1, version 2 again
+========================================================================
+deliver  order=order-1001  version=2  status=PAID
+  action:          buffered
+  detail:          held version 2 (PAID); waiting for missing version(s) [1]
+  applied_version: 0
+  current_status:  (none)
+  pending:         [2]
+  missing:         [1]
+
+deliver  order=order-1001  version=1  status=CREATED
+  action:          applied
+  detail:          applied version 1 (CREATED), version 2 (PAID)
+  applied_version: 2
+  current_status:  PAID
+  pending:         []
+  missing:         []
+
+deliver  order=order-1001  version=2  status=PAID
+  action:          duplicate
+  detail:          ignored version 2; it was already applied or buffered
+  applied_version: 2
+  current_status:  PAID
+  pending:         []
+  missing:         []
+
+========================================================================
+2. Missing event
+   Version 1 is applied, then only version 3 arrives
+========================================================================
+deliver  order=order-1002  version=1  status=CREATED
+  action:          applied
+  detail:          applied version 1 (CREATED)
+  applied_version: 1
+  current_status:  CREATED
+  pending:         []
+  missing:         []
+
+deliver  order=order-1002  version=3  status=SHIPPED
+  action:          buffered
+  detail:          held version 3 (SHIPPED); waiting for missing version(s) [2]
+  applied_version: 1
+  current_status:  CREATED
+  pending:         [3]
+  missing:         [2]
+
+check: status stayed CREATED; version 3 was not applied while version 2 was missing
+
+========================================================================
+3. Stale worker
+   Two workers, increasing fencing tokens, one delayed writer
+========================================================================
+lock service issued token 1 to worker-A
+worker-A write  token=1  version=1  status=CREATED
+  accepted:        True
+  detail:          accepted token 1; applied version 1 (CREATED)
+  store_fence:     1
+  current_status:  CREATED
+
+lock service issued token 2 to worker-B
+worker-A is now stale: it still holds token 1 and has not heard about token 2
+worker-B write  token=2  version=2  status=PAID
+  accepted:        True
+  detail:          accepted token 2; applied version 2 (PAID)
+  store_fence:     2
+  current_status:  PAID
+
+worker-A write  token=1  version=3  status=SHIPPED
+  accepted:        False
+  detail:          rejected token 1; store fence is 2 (stale worker)
+  store_fence:     2
+  current_status:  PAID
+  applied_version: 2
+
+check: worker-B (token 2) updated the order; worker-A (token 1) was rejected
+
+All checks passed.
